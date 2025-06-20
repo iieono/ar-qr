@@ -30,6 +30,7 @@ interface Product {
   price: number;
   productId: string;
   category: string;
+  alternative: string;
   productImage?: string;
   certificateFile?: string;
   createdDate: string;
@@ -38,10 +39,20 @@ interface Product {
   productUrl: string;
   createdBy: string;
   isHalal: boolean;
+  // New nutrition fields
+  carbohydrates: number;
+  proteins: number;
+  fats: number;
+  alcohol: number;
+  totalKcal: number;
 }
 
 export default function App() {
   const [scannedProduct, setScannedProduct] = useState<Product | null>(null);
+  const [alternativeProduct, setAlternativeProduct] = useState<Product | null>(
+    null
+  );
+  const [suggestedProducts, setSuggestedProducts] = useState<Product[]>([]);
   const [scanning, setScanning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showResult, setShowResult] = useState(false);
@@ -69,6 +80,78 @@ export default function App() {
     return () => scanningLoop.stop();
   }, []);
 
+  const fetchSuggestedProducts = async (currentProduct: Product) => {
+    try {
+      const allProducts = await databases.listDocuments(
+        appwriteConfig.databaseId,
+        appwriteConfig.productCollectionId
+      );
+      const otherProducts = allProducts.documents.filter(
+        (p: any) => p.productId !== currentProduct.productId
+      );
+
+      // Find products in the same category
+      const sameCategoryProducts = otherProducts.filter(
+        (p: any) => p.category === currentProduct.category
+      );
+
+      let suggestions: Product[] = [];
+
+      if (sameCategoryProducts.length >= 2) {
+        // If we have 2+ products in same category, pick 2 random ones
+        const shuffled = sameCategoryProducts.sort(() => 0.5 - Math.random());
+        suggestions = shuffled.slice(0, 2).map(convertToProduct);
+      } else if (sameCategoryProducts.length === 1) {
+        // If we have 1 product in same category, add it and 1 random from other categories
+        suggestions.push(convertToProduct(sameCategoryProducts[0]));
+        const otherCategoryProducts = otherProducts.filter(
+          (p: any) => p.category !== currentProduct.category
+        );
+        if (otherCategoryProducts.length > 0) {
+          const randomOther =
+            otherCategoryProducts[
+              Math.floor(Math.random() * otherCategoryProducts.length)
+            ];
+          suggestions.push(convertToProduct(randomOther));
+        }
+      } else {
+        // No products in same category, pick 2 random from any category
+        const shuffled = otherProducts.sort(() => 0.5 - Math.random());
+        suggestions = shuffled.slice(0, 2).map(convertToProduct);
+      }
+
+      setSuggestedProducts(suggestions);
+    } catch (error) {
+      console.error("Error fetching suggested products:", error);
+      setSuggestedProducts([]);
+    }
+  };
+
+  const convertToProduct = (productData: any): Product => {
+    return {
+      $id: productData.$id,
+      name: productData.name || "",
+      description: productData.description || "",
+      price: productData.price || 0,
+      productId: productData.productId || "",
+      category: productData.category || "",
+      alternative: productData.alternative || "",
+      productImage: productData.productImage || "",
+      certificateFile: productData.certificateFile || "",
+      createdDate: productData.createdDate || new Date().toISOString(),
+      expirationDate: productData.expirationDate || new Date().toISOString(),
+      qrCodeUrl: productData.qrCodeUrl || "",
+      productUrl: productData.productUrl || "",
+      createdBy: productData.createdBy || "",
+      isHalal: productData.isHalal || false,
+      carbohydrates: productData.carbohydrates || 0,
+      proteins: productData.proteins || 0,
+      fats: productData.fats || 0,
+      alcohol: productData.alcohol || 0,
+      totalKcal: productData.totalKcal || 0,
+    };
+  };
+
   const fetchProductInfo = async (productId: string) => {
     try {
       setLoading(true);
@@ -83,26 +166,26 @@ export default function App() {
       );
 
       if (productData) {
-        // Properly convert Document to Product interface
-        const product: Product = {
-          $id: productData.$id,
-          name: productData.name || "",
-          description: productData.description || "",
-          price: productData.price || 0,
-          productId: productData.productId || "",
-          category: productData.category || "",
-          productImage: productData.productImage || "",
-          certificateFile: productData.certificateFile || "",
-          createdDate: productData.createdDate || new Date().toISOString(),
-          expirationDate:
-            productData.expirationDate || new Date().toISOString(),
-          qrCodeUrl: productData.qrCodeUrl || "",
-          productUrl: productData.productUrl || "",
-          createdBy: productData.createdBy || "",
-          isHalal: productData.isHalal || false,
-        };
-
+        const product = convertToProduct(productData);
         setScannedProduct(product);
+
+        // Fetch alternative product if it exists
+        if (product.alternative) {
+          const alternativeData = allProducts.documents.find(
+            (p: any) => p.$id === product.alternative
+          );
+          if (alternativeData) {
+            setAlternativeProduct(convertToProduct(alternativeData));
+          } else {
+            setAlternativeProduct(null);
+          }
+        } else {
+          setAlternativeProduct(null);
+        }
+
+        // Fetch suggested products
+        await fetchSuggestedProducts(product);
+
         setShowResult(true);
 
         // Animate the modal sliding up
@@ -145,6 +228,8 @@ export default function App() {
     }).start(() => {
       setShowResult(false);
       setScannedProduct(null);
+      setAlternativeProduct(null);
+      setSuggestedProducts([]);
       setScanning(false);
     });
   };
@@ -178,7 +263,10 @@ export default function App() {
 
   const formatPrice = (price: number) => {
     if (!price) return "0.00";
-    return price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    return price
+      .toFixed(2)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   };
 
   const formatDate = (dateString: string) => {
@@ -446,33 +534,6 @@ export default function App() {
                         colors={["transparent", "rgba(0,0,0,0.3)"]}
                         style={styles.imageOverlay}
                       />
-
-                      {/* Halal Overlay Badge */}
-                      <View style={styles.imageHalalBadge}>
-                        <View
-                          style={[
-                            styles.halalOverlay,
-                            {
-                              backgroundColor: scannedProduct.isHalal
-                                ? "#10b981"
-                                : "#ef4444",
-                            },
-                          ]}
-                        >
-                          <Ionicons
-                            name={
-                              scannedProduct.isHalal
-                                ? "checkmark-circle"
-                                : "close-circle"
-                            }
-                            size={20}
-                            color="white"
-                          />
-                          <Text style={styles.halalOverlayText}>
-                            {scannedProduct.isHalal ? "HALAL" : "NOT HALAL"}
-                          </Text>
-                        </View>
-                      </View>
                     </View>
                   )}
 
@@ -503,8 +564,133 @@ export default function App() {
                       <Text style={styles.priceLabel}>Price</Text>
                     </View>
                     <Text style={styles.price}>
-                      {formatPrice(scannedProduct.price)} sum
+                      {formatPrice(scannedProduct.price)} so'm
                     </Text>
+                  </View>
+
+                  {/* Nutrition Information Card */}
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Nutrition Information</Text>
+
+                    <View style={styles.nutritionGrid}>
+                      <View style={styles.nutritionItem}>
+                        <View
+                          style={[
+                            styles.nutritionIcon,
+                            { backgroundColor: "#fef3c7" },
+                          ]}
+                        >
+                          <Ionicons
+                            name="leaf-outline"
+                            size={20}
+                            color="#f59e0b"
+                          />
+                        </View>
+                        <View style={styles.nutritionContent}>
+                          <Text style={styles.nutritionLabel}>
+                            Carbohydrates
+                          </Text>
+                          <Text style={styles.nutritionValue}>
+                            {scannedProduct.carbohydrates || 0}g
+                          </Text>
+                          <Text style={styles.nutritionKcal}>
+                            {(scannedProduct.carbohydrates || 0) * 4} kcal
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.nutritionItem}>
+                        <View
+                          style={[
+                            styles.nutritionIcon,
+                            { backgroundColor: "#dbeafe" },
+                          ]}
+                        >
+                          <Ionicons
+                            name="fitness-outline"
+                            size={20}
+                            color="#3b82f6"
+                          />
+                        </View>
+                        <View style={styles.nutritionContent}>
+                          <Text style={styles.nutritionLabel}>Proteins</Text>
+                          <Text style={styles.nutritionValue}>
+                            {scannedProduct.proteins || 0}g
+                          </Text>
+                          <Text style={styles.nutritionKcal}>
+                            {(scannedProduct.proteins || 0) * 4} kcal
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.nutritionItem}>
+                        <View
+                          style={[
+                            styles.nutritionIcon,
+                            { backgroundColor: "#fecaca" },
+                          ]}
+                        >
+                          <Ionicons
+                            name="water-outline"
+                            size={20}
+                            color="#ef4444"
+                          />
+                        </View>
+                        <View style={styles.nutritionContent}>
+                          <Text style={styles.nutritionLabel}>Fats</Text>
+                          <Text style={styles.nutritionValue}>
+                            {scannedProduct.fats || 0}g
+                          </Text>
+                          <Text style={styles.nutritionKcal}>
+                            {(scannedProduct.fats || 0) * 9} kcal
+                          </Text>
+                        </View>
+                      </View>
+
+                      {scannedProduct.alcohol > 0 && (
+                        <View style={styles.nutritionItem}>
+                          <View
+                            style={[
+                              styles.nutritionIcon,
+                              { backgroundColor: "#e5e7eb" },
+                            ]}
+                          >
+                            <Ionicons
+                              name="wine-outline"
+                              size={20}
+                              color="#6b7280"
+                            />
+                          </View>
+                          <View style={styles.nutritionContent}>
+                            <Text style={styles.nutritionLabel}>Alcohol</Text>
+                            <Text style={styles.nutritionValue}>
+                              {scannedProduct.alcohol}g
+                            </Text>
+                            <Text style={styles.nutritionKcal}>
+                              {scannedProduct.alcohol * 7} kcal
+                            </Text>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Total Calories */}
+                    <View style={styles.totalCaloriesContainer}>
+                      <LinearGradient
+                        colors={["#10b981", "#059669"]}
+                        style={styles.totalCaloriesGradient}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                      >
+                        <Ionicons name="flame" size={24} color="white" />
+                        <Text style={styles.totalCaloriesText}>
+                          Total Calories
+                        </Text>
+                        <Text style={styles.totalCaloriesValue}>
+                          {scannedProduct.totalKcal || 0} kcal
+                        </Text>
+                      </LinearGradient>
+                    </View>
                   </View>
 
                   {/* Product Information Grid */}
@@ -512,23 +698,6 @@ export default function App() {
                     <Text style={styles.cardTitle}>Product Information</Text>
 
                     <View style={styles.infoGrid}>
-                      {/* Product ID */}
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoIcon}>
-                          <Ionicons
-                            name="barcode-outline"
-                            size={20}
-                            color="#6366f1"
-                          />
-                        </View>
-                        <View style={styles.infoContent}>
-                          <Text style={styles.infoLabel}>Product ID</Text>
-                          <Text style={styles.infoValue}>
-                            {scannedProduct.productId}
-                          </Text>
-                        </View>
-                      </View>
-
                       {/* Halal Status */}
                       <View style={styles.infoItem}>
                         <View
@@ -569,23 +738,6 @@ export default function App() {
                             {scannedProduct.isHalal
                               ? "Halal Certified"
                               : "Not Halal"}
-                          </Text>
-                        </View>
-                      </View>
-
-                      {/* Created Date */}
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoIcon}>
-                          <Ionicons
-                            name="calendar-outline"
-                            size={20}
-                            color="#6366f1"
-                          />
-                        </View>
-                        <View style={styles.infoContent}>
-                          <Text style={styles.infoLabel}>Created Date</Text>
-                          <Text style={styles.infoValue}>
-                            {formatDateTime(scannedProduct.createdDate)}
                           </Text>
                         </View>
                       </View>
@@ -653,23 +805,6 @@ export default function App() {
                           </Text>
                         </View>
                       </View>
-
-                      {/* Created By */}
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoIcon}>
-                          <Ionicons
-                            name="person-outline"
-                            size={20}
-                            color="#8b5cf6"
-                          />
-                        </View>
-                        <View style={styles.infoContent}>
-                          <Text style={styles.infoLabel}>Created By</Text>
-                          <Text style={styles.infoValue}>
-                            {scannedProduct.createdBy || "Unknown"}
-                          </Text>
-                        </View>
-                      </View>
                     </View>
                   </View>
 
@@ -709,6 +844,208 @@ export default function App() {
                         </View>
                       </LinearGradient>
                     </TouchableOpacity>
+                  )}
+
+                  {/* QR Code Card */}
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>QR Code</Text>
+                    <View style={styles.qrContainer}>
+                      <View style={styles.qrCodeWrapper}>
+                        <Image
+                          source={{ uri: scannedProduct.qrCodeUrl }}
+                          style={styles.qrCode}
+                        />
+                      </View>
+                      <Text style={styles.productIdCode}>
+                        ID: {scannedProduct.productId}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Alternative Product Card */}
+                  {alternativeProduct && (
+                    <View style={styles.card}>
+                      <Text style={styles.cardTitle}>Alternative Product</Text>
+                      <Text style={styles.alternativeSubtitle}>
+                        Available substitute for this product
+                      </Text>
+
+                      <View style={styles.alternativeContainer}>
+                        {/* Alternative Product Image */}
+                        <View style={styles.alternativeImageContainer}>
+                          <Image
+                            source={{
+                              uri:
+                                alternativeProduct.productImage ||
+                                "/placeholder.svg",
+                            }}
+                            style={styles.alternativeImage}
+                            resizeMode="cover"
+                          />
+                          {/* Halal Badge on Image */}
+                          <View style={styles.alternativeImageBadge}>
+                            <View
+                              style={[
+                                styles.alternativeHalalOverlay,
+                                {
+                                  backgroundColor: alternativeProduct.isHalal
+                                    ? "#10b981"
+                                    : "#ef4444",
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  alternativeProduct.isHalal
+                                    ? "checkmark-circle"
+                                    : "close-circle"
+                                }
+                                size={12}
+                                color="white"
+                              />
+                              <Text style={styles.alternativeHalalText}>
+                                {alternativeProduct.isHalal
+                                  ? "HALAL"
+                                  : "NOT HALAL"}
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+
+                        {/* Alternative Product Info */}
+                        <View style={styles.alternativeContent}>
+                          <View style={styles.alternativeHeader}>
+                            <Text
+                              style={styles.alternativeName}
+                              numberOfLines={2}
+                            >
+                              {alternativeProduct.name}
+                            </Text>
+                            <View style={styles.alternativeCategoryBadge}>
+                              <Ionicons
+                                name="pricetag"
+                                size={12}
+                                color="#6366f1"
+                              />
+                              <Text style={styles.alternativeCategoryText}>
+                                {alternativeProduct.category}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <Text
+                            style={styles.alternativeDescription}
+                            numberOfLines={3}
+                          >
+                            {alternativeProduct.description}
+                          </Text>
+
+                          <View style={styles.alternativeFooter}>
+                            <View style={styles.alternativePrice}>
+                              <Text style={styles.alternativePriceText}>
+                                {formatPrice(alternativeProduct.price)} so'm
+                              </Text>
+                            </View>
+                            <View style={styles.alternativeNutrition}>
+                              <Ionicons
+                                name="flame"
+                                size={14}
+                                color="#f59e0b"
+                              />
+                              <Text style={styles.alternativeKcal}>
+                                {alternativeProduct.totalKcal || 0} kcal
+                              </Text>
+                            </View>
+                          </View>
+
+                          {/* Halal Status Row */}
+                          <View style={styles.alternativeHalalStatus}>
+                            <Ionicons
+                              name={
+                                alternativeProduct.isHalal
+                                  ? "checkmark-circle"
+                                  : "close-circle"
+                              }
+                              size={16}
+                              color={
+                                alternativeProduct.isHalal
+                                  ? "#10b981"
+                                  : "#ef4444"
+                              }
+                            />
+                            <Text
+                              style={[
+                                styles.alternativeHalalStatusText,
+                                {
+                                  color: alternativeProduct.isHalal
+                                    ? "#10b981"
+                                    : "#ef4444",
+                                },
+                              ]}
+                            >
+                              {alternativeProduct.isHalal
+                                ? "Halal Certified"
+                                : "Not Halal"}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Suggested Products */}
+                  {suggestedProducts.length > 0 && (
+                    <View style={styles.card}>
+                      <Text style={styles.cardTitle}>Suggested Products</Text>
+                      <Text style={styles.suggestedSubtitle}>
+                        You might also like these products
+                      </Text>
+
+                      <View style={styles.suggestedGrid}>
+                        {suggestedProducts.map((product, index) => (
+                          <View key={product.$id} style={styles.suggestedItem}>
+                            <View style={styles.suggestedImageContainer}>
+                              <Image
+                                source={{
+                                  uri:
+                                    product.productImage || "/placeholder.svg",
+                                }}
+                                style={styles.suggestedImage}
+                                resizeMode="cover"
+                              />
+                              {product.isHalal && (
+                                <View style={styles.suggestedHalalBadge}>
+                                  <Ionicons
+                                    name="checkmark-circle"
+                                    size={12}
+                                    color="white"
+                                  />
+                                </View>
+                              )}
+                            </View>
+                            <View style={styles.suggestedContent}>
+                              <Text
+                                style={styles.suggestedName}
+                                numberOfLines={2}
+                              >
+                                {product.name}
+                              </Text>
+                              <Text style={styles.suggestedCategory}>
+                                {product.category}
+                              </Text>
+                              <View style={styles.suggestedNutrition}>
+                                <Text style={styles.suggestedKcal}>
+                                  {product.totalKcal || 0} kcal
+                                </Text>
+                                <Text style={styles.suggestedPrice}>
+                                  {formatPrice(product.price)} so'm
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
                   )}
 
                   {/* Action Buttons */}
@@ -921,7 +1258,7 @@ const styles = StyleSheet.create({
   closeButton: {
     position: "absolute",
     top: 0,
-    right: 5,
+    right: 20,
     zIndex: 10,
   },
   closeButtonBlur: {
@@ -1108,6 +1445,70 @@ const styles = StyleSheet.create({
     color: "#1f2937",
     marginBottom: 16,
   },
+  nutritionSubtitle: {
+    fontSize: 14,
+    color: "#6b7280",
+    marginBottom: 16,
+    marginTop: -8,
+  },
+  nutritionGrid: {
+    gap: 16,
+  },
+  nutritionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  nutritionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
+  nutritionContent: {
+    flex: 1,
+  },
+  nutritionLabel: {
+    fontSize: 14,
+    color: "#6b7280",
+    fontWeight: "500",
+    marginBottom: 2,
+  },
+  nutritionValue: {
+    fontSize: 18,
+    color: "#1f2937",
+    fontWeight: "700",
+  },
+  nutritionKcal: {
+    fontSize: 12,
+    color: "#9ca3af",
+    marginTop: 2,
+  },
+  totalCaloriesContainer: {
+    marginTop: 16,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  totalCaloriesGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+  },
+  totalCaloriesText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "600",
+    marginLeft: 8,
+    marginRight: 12,
+  },
+  totalCaloriesValue: {
+    color: "white",
+    fontSize: 24,
+    fontWeight: "bold",
+  },
   infoGrid: {
     gap: 16,
   },
@@ -1237,6 +1638,73 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#6b7280",
   },
+  suggestedSubtitle: {
+    fontSize: 14,
+    color: "#6b7280",
+    marginBottom: 16,
+    marginTop: -8,
+  },
+  suggestedGrid: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  suggestedItem: {
+    flex: 1,
+    backgroundColor: "#f9fafb",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  suggestedImageContainer: {
+    position: "relative",
+    marginBottom: 8,
+  },
+  suggestedImage: {
+    width: "100%",
+    height: 80,
+    borderRadius: 8,
+  },
+  suggestedHalalBadge: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    backgroundColor: "#10b981",
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  suggestedContent: {
+    gap: 4,
+  },
+  suggestedName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1f2937",
+    lineHeight: 18,
+  },
+  suggestedCategory: {
+    fontSize: 12,
+    color: "#6b7280",
+  },
+  suggestedNutrition: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  suggestedKcal: {
+    fontSize: 12,
+    color: "#059669",
+    fontWeight: "600",
+  },
+  suggestedPrice: {
+    fontSize: 12,
+    color: "#1f2937",
+    fontWeight: "600",
+  },
   actionButtons: {
     marginTop: 24,
     gap: 12,
@@ -1265,5 +1733,120 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: 40,
+  },
+  alternativeSubtitle: {
+    fontSize: 14,
+    color: "#6b7280",
+    marginBottom: 16,
+    marginTop: -8,
+  },
+  alternativeContainer: {
+    flexDirection: "row",
+    backgroundColor: "#f9fafb",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  alternativeImageContainer: {
+    position: "relative",
+    marginRight: 16,
+  },
+  alternativeImage: {
+    width: 80,
+    height: 120,
+    borderRadius: 8,
+  },
+  alternativeImageBadge: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+  },
+  alternativeHalalOverlay: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  alternativeHalalText: {
+    color: "white",
+    fontSize: 8,
+    fontWeight: "bold",
+    marginLeft: 2,
+  },
+  alternativeContent: {
+    flex: 1,
+    justifyContent: "space-between",
+  },
+  alternativeHeader: {
+    marginBottom: 8,
+  },
+  alternativeName: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#1f2937",
+    marginBottom: 4,
+  },
+  alternativeCategoryBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f0f0ff",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    alignSelf: "flex-start",
+  },
+  alternativeCategoryText: {
+    fontSize: 10,
+    color: "#6366f1",
+    fontWeight: "600",
+    marginLeft: 2,
+  },
+  alternativeDescription: {
+    fontSize: 12,
+    color: "#6b7280",
+    lineHeight: 16,
+    marginBottom: 8,
+  },
+  alternativeFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  alternativePrice: {
+    backgroundColor: "#dcfce7",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  alternativePriceText: {
+    fontSize: 12,
+    fontWeight: "bold",
+    color: "#16a34a",
+  },
+  alternativeNutrition: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fef3c7",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  alternativeKcal: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#f59e0b",
+    marginLeft: 4,
+  },
+  alternativeHalalStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  alternativeHalalStatusText: {
+    fontSize: 12,
+    fontWeight: "600",
+    marginLeft: 4,
   },
 });

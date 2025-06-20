@@ -49,7 +49,7 @@ export default function RootLayout() {
         {/* 404 page */}
         <Stack.Screen name="+not-found" />
       </Stack>
-      <StatusBar style="dark" />{" "}
+      <StatusBar style="dark" />
       {/* Ensure status bar uses dark theme for light mode */}
     </ThemeProvider>
   );
